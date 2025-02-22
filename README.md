@@ -21,6 +21,6 @@ cargo build -r
 
 ## Acknowledgements
 
-Thanks @richardios275 for the fe2io-python project, which was overall an inspiration for this being my first real Rust project
+Thanks [@richardios275](https://github.com/richardios275) for the fe2io-python project, which was overall an inspiration for this being my first real Rust project
 
-Thanks @Crazyblox for making FE2 and creating the Flood Escape genre as a whole (i think tria is a better game though)
+Thanks [@Crazyblox](https://github.com/Crazyblox) for making FE2 and creating the Flood Escape genre as a whole (i think tria is a better game though)
