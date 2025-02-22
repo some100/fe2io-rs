@@ -9,20 +9,35 @@ use tungstenite::{WebSocket, connect, Message};
 use tungstenite::stream::MaybeTlsStream;
 use reqwest::blocking::get;
 use anyhow::{Context, anyhow, Result};
+use log::{debug, info, warn, error};
+use env_logger::Env;
 
+/// Lighterweight alternative for fe2.io
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    /// Username of player
     username: String,
+    /// Volume of sound on death
     #[arg(short, long, default_value_t = 0.5)]
     volume: f32,
+    /// WebSocket server URL to connect to
     #[arg(short, long, default_value = "ws://client.fe2.io:8081")]
     url: String,
+    /// Delay for failed connection in seconds
+    #[arg(long, default_value_t = 1)]
+    delay: u64,
+    /// Multiplier for delay in failed connection
+    #[arg(long, default_value_t = 2)]
+    backoff: u64,
 }
 
 fn main() -> Result<()> {
+    let env = Env::default().filter_or("LOG_LEVEL", "info");
+    env_logger::init_from_env(env);
+
     let args = Args::parse();
-    let mut server = connect_to_server(&args.url, &args.username)?;
+    let mut server = connect_to_server(&args.url, &args.username, args.delay, args.backoff)?;
 
     let (_stream, stream_handle) = OutputStream::try_default()?;
     let sink = Sink::try_new(&stream_handle)?;
@@ -30,28 +45,28 @@ fn main() -> Result<()> {
     loop {
         match handle_events(&mut server, &sink, &args) {
             Err(e) if e.to_string() == "Connection closed normally" => {
-                eprintln!("Lost connection to server, attempting to reconnect");
-                server = connect_to_server(&args.url, &args.username)?;
+                warn!("Lost connection to server, attempting to reconnect");
+                server = connect_to_server(&args.url, &args.username, args.delay, args.backoff)?;
             },
-            Err(e) => eprintln!("Error: {e}"),
+            Err(e) => error!("Error: {e}"),
             _ => (),
         }
     }
 }
 
-fn connect_to_server(url: &str, username: &str) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
-    let mut delay = 1;
+fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
+    let mut wait = delay;
     let (mut server, _) = loop {
         if let Ok(server) = connect(url) {
             break server;
         }
-        eprintln!("Failed to connect to server {url}, retrying in {delay} seconds");
-        sleep(Duration::from_secs(delay));
-        delay *= 2;
+        warn!("Failed to connect to server {url}, retrying in {wait} seconds");
+        sleep(Duration::from_secs(wait));
+        wait *= backoff;
     };
     server.send(Message::Text(username.into()))
         .with_context(|| format!("Failed to connect to server {}", url))?;
-    println!("Connected to server {url} with username {username}");
+    info!("Connected to server {url} with username {username}");
     Ok(server)
 }
 
@@ -65,13 +80,13 @@ fn handle_events(server: &mut WebSocket<MaybeTlsStream<TcpStream>>, sink: &Sink,
     match *msg_type {
         "bgm" => play_audio(msg, &sink)?,
         "gameStatus" => handle_status(msg, &sink, &args)?,
-        _ => (),
+        _ => error!("Server sent invalid msgType {}", *msg_type),
     };
     Ok(())
 }
 
 fn play_audio(msg: Value, sink: &Sink) -> Result<()> {
-    sink.clear();
+    sink.stop();
     let url = msg["audioUrl"]
         .as_str()
         .ok_or_else(|| anyhow!("Server sent response of type bgm but no URL was provided"))?;
@@ -80,8 +95,7 @@ fn play_audio(msg: Value, sink: &Sink) -> Result<()> {
     let cursor = Cursor::new(audio.bytes()?);
     let source = Decoder::new(cursor)?;
     sink.append(source);
-    sink.play();
-    println!("Playing audio {url}");
+    debug!("Playing audio {url}");
     Ok(())
 }
 
@@ -94,6 +108,6 @@ fn handle_status(msg: Value, sink: &Sink, args: &Args) -> Result<()> {
         "left" => sink.clear(),
         _ => (),
     }
-    println!("Set game status to {statustype}");
+    debug!("Set game status to {statustype}");
     Ok(())
 }
