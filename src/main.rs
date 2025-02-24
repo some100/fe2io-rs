@@ -91,7 +91,7 @@ fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attemp
                 }
                 warn!("Failed to connect to server {}, retrying in {} seconds. {}/{}", url, delay, retries, attempts);
                 std::thread::sleep(std::time::Duration::from_secs(delay));
-                delay *= backoff;
+                delay = std::cmp::min(delay * backoff, 60);
                 retries += 1;
             }
         }
@@ -111,7 +111,7 @@ fn handle_events(server: &mut WebSocket<MaybeTlsStream<TcpStream>>, sink: &Sink,
     match msg_type {
         "bgm" => play_audio(msg, &sink)?,
         "gameStatus" => handle_status(msg, &sink, &args)?,
-        _ => error!("Server sent invalid msgType {}", msg_type),
+        _ => warn!("Server sent invalid msgType {}", msg_type),
     };
     Ok(())
 }
@@ -130,13 +130,13 @@ fn play_audio(msg: Msg, sink: &Sink) -> Result<()> {
 }
 
 fn handle_status(msg: Msg, sink: &Sink, args: &Args) -> Result<()> {
-    let statustype = msg.status_type
+    let status_type = msg.status_type
         .context("Server sent response of type gameStatus but no status was provided")?;
-    match statustype.as_str() {
+    match status_type.as_str() {
         "died" => sink.set_volume(args.volume),
         "left" => sink.clear(),
-        _ => (),
+        _ => warn!("Server sent invalid statusType {}", status_type),
     }
-    debug!("Set game status to {}", statustype);
+    debug!("Set game status to {}", status_type);
     Ok(())
 }
