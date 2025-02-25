@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
+use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel};
 use futures::StreamExt;
 use clap::Parser;
 use rodio::{Sink, Decoder, OutputStream};
@@ -12,7 +13,7 @@ use thiserror::Error;
 use log::{debug, info, warn, error};
 
 /// Lighterweight alternative for fe2.io
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(version, about, long_about = None)]
 struct Args {
     /// Username of player
@@ -56,6 +57,8 @@ pub enum Fe2IoError {
     Player(#[from] rodio::PlayError),
     #[error("HTTP Request Error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("Send Error: {0}")]
+    Send(#[from] tokio::sync::mpsc::error::SendError<String>),
     #[error("IO Error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON Error: {0}")]
@@ -81,9 +84,22 @@ async fn main() -> Result<(), Fe2IoError> {
     let (_stream, stream_handle) = OutputStream::try_default()?;
     let sink = Sink::try_new(&stream_handle)?;
 
+    let (tx, mut rx) = unbounded_channel();
+
+    let args_clone = args.clone();
+    tokio::spawn(async move {
+        loop {
+            match handle_audio_inputs(&sink, &mut rx, &args_clone).await {
+                Err(e) => error!("{}", e),
+                _ => (),
+            }
+        }
+    });
+
     loop {
-        match handle_events(&mut server, &sink, &args).await {
-            Err(Fe2IoError::WebSocket(_)) => { // if a websocket error happens in general (closed, io error, or already closed) we should probably try reconnecting anyways
+        match handle_events(&mut server, tx.clone()).await {
+            Err(Fe2IoError::WebSocket(e)) => { // if a websocket error happens in general (closed, io error, or already closed) we should probably try reconnecting anyways
+                error!("{}", e);
                 drop(server);
                 warn!("Lost connection to server, attempting to reconnect");
                 server = match connect_to_server(&args.url, &args.username, args.delay, args.backoff, args.attempts).await {
@@ -106,8 +122,10 @@ async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, 
     let (mut server, _) = loop {
         match connect_async(url).await {
             Ok(server) => break server,
+            Err(tungstenite::Error::Url(e)) => return Err(Fe2IoError::WebSocket(tungstenite::Error::Url(e))), // if url is invalid, dont bother retrying since theres no hope of it working
             Err(e) => {
                 if retries > attempts {
+                    error!("Failed to connect after {} attempts, bailing", attempts);
                     return Err(Fe2IoError::WebSocket(e));
                 }
                 debug!("Failed to connect: {}", e);
@@ -123,13 +141,33 @@ async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, 
     Ok(server)
 }
 
-async fn handle_events(server: &mut WebSocketStream<TokioAdapter<TcpStream>>, sink: &Sink, args: &Args) -> Result<(), Fe2IoError> {
+async fn handle_audio_inputs(sink: &Sink, rx: &mut UnboundedReceiver<String>, args: &Args) -> Result<(), Fe2IoError> {
+    let input = rx.recv().await
+        .ok_or(Fe2IoError::Generic("Failed to receive inputs".to_owned()))?;
+    match input.as_str() {
+        "died" => sink.set_volume(args.volume),
+        "left" => sink.stop(),
+        _ => {
+            sink.stop();
+            let audio = reqwest::get(&input).await?;
+            if !audio.status().is_success() {
+                return Err(Fe2IoError::Generic(format!("URL {} returned error {}", input, audio.status())));
+            }
+            let cursor = Cursor::new(audio.bytes().await?);
+            let source = Decoder::new(cursor)?;
+            sink.append(source);
+        }
+    }
+    Ok(())
+}
+
+async fn handle_events(server: &mut WebSocketStream<TokioAdapter<TcpStream>>, tx: UnboundedSender<String>) -> Result<(), Fe2IoError> {
     let response = read_server_response(server).await?;
     let msg: Msg = match json::from_str(&response) {
         Ok(msg) => msg,
         Err(_) => return Err(Fe2IoError::Json(response)), // miniserde errors are basically useless, so just return json directly
     };
-    match_server_response(msg, &sink, &args).await?;
+    match_server_response(msg, tx).await?;
     Ok(())
 }
 
@@ -142,35 +180,27 @@ async fn read_server_response(server: &mut WebSocketStream<TokioAdapter<TcpStrea
     Ok(response.to_text()?.to_owned())
 }
 
-async fn match_server_response(msg: Msg, sink: &Sink, args: &Args) -> Result<(), Fe2IoError> {
+async fn match_server_response(msg: Msg, tx: UnboundedSender<String>) -> Result<(), Fe2IoError> {
     match msg.msg_type.as_str() {
-        "bgm" => play_audio(msg, &sink).await?,
-        "gameStatus" => handle_status(msg, &sink, &args).await?,
+        "bgm" => get_audio(msg, tx).await?,
+        "gameStatus" => get_status(msg, tx).await?,
         _ => warn!("Server sent invalid msgType {}", msg.msg_type),
     };
     Ok(())
 }
 
-async fn play_audio(msg: Msg, sink: &Sink) -> Result<(), Fe2IoError> {
-    sink.stop();
+async fn get_audio(msg: Msg, tx: UnboundedSender<String>) -> Result<(), Fe2IoError> {
     let url = msg.audio_url
         .ok_or(Fe2IoError::Generic("Server sent response of type bgm but no URL was provided".to_owned()))?;
-    let audio = reqwest::get(&url).await?;
-    let cursor = Cursor::new(audio.bytes().await?);
-    let source = Decoder::new(cursor)?;
-    sink.append(source);
     debug!("Playing audio {}", url);
+    tx.send(url)?;
     Ok(())
 }
 
-async fn handle_status(msg: Msg, sink: &Sink, args: &Args) -> Result<(), Fe2IoError> {
+async fn get_status(msg: Msg, tx: UnboundedSender<String>) -> Result<(), Fe2IoError> {
     let status_type = msg.status_type
         .ok_or(Fe2IoError::Generic("Server sent response of type gameStatus but no status was provided".to_owned()))?;
-    match status_type.as_str() {
-        "died" => sink.set_volume(args.volume),
-        "left" => sink.stop(),
-        _ => warn!("Server sent invalid statusType {}", status_type),
-    }
     debug!("Set game status to {}", status_type);
+    tx.send(status_type)?;
     Ok(())
 }
