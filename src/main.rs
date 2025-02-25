@@ -1,8 +1,8 @@
 use std::io::Cursor;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
-use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel};
-use futures::StreamExt;
+use tokio::sync::mpsc::{Sender, Receiver, channel};
+use futures_lite::StreamExt;
 use clap::Parser;
 use rodio::{Sink, Decoder, OutputStream};
 use miniserde::{json, Deserialize};
@@ -84,7 +84,7 @@ async fn main() -> Result<(), Fe2IoError> {
     let (_stream, stream_handle) = OutputStream::try_default()?;
     let sink = Sink::try_new(&stream_handle)?;
 
-    let (tx, mut rx) = unbounded_channel();
+    let (tx, mut rx) = channel(4);
 
     let args_clone = args.clone();
     tokio::spawn(async move {
@@ -141,7 +141,7 @@ async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, 
     Ok(server)
 }
 
-async fn handle_audio_inputs(sink: &Sink, rx: &mut UnboundedReceiver<String>, args: &Args) -> Result<(), Fe2IoError> {
+async fn handle_audio_inputs(sink: &Sink, rx: &mut Receiver<String>, args: &Args) -> Result<(), Fe2IoError> {
     let input = rx.recv().await
         .ok_or(Fe2IoError::Generic("Failed to receive inputs".to_owned()))?;
     match input.as_str() {
@@ -161,7 +161,7 @@ async fn handle_audio_inputs(sink: &Sink, rx: &mut UnboundedReceiver<String>, ar
     Ok(())
 }
 
-async fn handle_events(server: &mut WebSocketStream<TokioAdapter<TcpStream>>, tx: UnboundedSender<String>) -> Result<(), Fe2IoError> {
+async fn handle_events(server: &mut WebSocketStream<TokioAdapter<TcpStream>>, tx: Sender<String>) -> Result<(), Fe2IoError> {
     let response = read_server_response(server).await?;
     let msg: Msg = match json::from_str(&response) {
         Ok(msg) => msg,
@@ -180,7 +180,7 @@ async fn read_server_response(server: &mut WebSocketStream<TokioAdapter<TcpStrea
     Ok(response.to_text()?.to_owned())
 }
 
-async fn match_server_response(msg: Msg, tx: UnboundedSender<String>) -> Result<(), Fe2IoError> {
+async fn match_server_response(msg: Msg, tx: Sender<String>) -> Result<(), Fe2IoError> {
     match msg.msg_type.as_str() {
         "bgm" => get_audio(msg, tx).await?,
         "gameStatus" => get_status(msg, tx).await?,
@@ -189,18 +189,18 @@ async fn match_server_response(msg: Msg, tx: UnboundedSender<String>) -> Result<
     Ok(())
 }
 
-async fn get_audio(msg: Msg, tx: UnboundedSender<String>) -> Result<(), Fe2IoError> {
+async fn get_audio(msg: Msg, tx: Sender<String>) -> Result<(), Fe2IoError> {
     let url = msg.audio_url
         .ok_or(Fe2IoError::Generic("Server sent response of type bgm but no URL was provided".to_owned()))?;
     debug!("Playing audio {}", url);
-    tx.send(url)?;
+    tx.send(url).await?;
     Ok(())
 }
 
-async fn get_status(msg: Msg, tx: UnboundedSender<String>) -> Result<(), Fe2IoError> {
+async fn get_status(msg: Msg, tx: Sender<String>) -> Result<(), Fe2IoError> {
     let status_type = msg.status_type
         .ok_or(Fe2IoError::Generic("Server sent response of type gameStatus but no status was provided".to_owned()))?;
     debug!("Set game status to {}", status_type);
-    tx.send(status_type)?;
+    tx.send(status_type).await?;
     Ok(())
 }
