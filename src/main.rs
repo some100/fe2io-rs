@@ -2,7 +2,7 @@ use std::io::Cursor;
 use std::net::TcpStream;
 use clap::Parser;
 use rodio::{Sink, Decoder, OutputStream};
-use serde::Deserialize;
+use miniserde::{json, Deserialize};
 use tungstenite::{WebSocket, connect, Message};
 use tungstenite::stream::MaybeTlsStream;
 use thiserror::Error;
@@ -32,10 +32,12 @@ struct Args {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct Msg {
+    #[serde(rename = "msgType")]
     msg_type: String,
+    #[serde(rename = "audioUrl")]
     audio_url: Option<String>,
+    #[serde(rename = "statusType")]
     status_type: Option<String>,
 }
 
@@ -43,8 +45,6 @@ struct Msg {
 pub enum Fe2IoError {
     #[error("WebSocket Error: {0}")]
     WebSocket(#[from] tungstenite::Error),
-    #[error("JSON Error: {0}")]
-    Json(#[from] serde_json::Error),
     #[error("Audio Decode Error: {0}")]
     Decoder(#[from] rodio::decoder::DecoderError),
     #[error("Audio Stream Error: {0}")]
@@ -53,6 +53,8 @@ pub enum Fe2IoError {
     Player(#[from] rodio::PlayError),
     #[error("HTTP Request Error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("JSON Error: {0}")]
+    Json(String),
     #[error("Error: {0}")]
     Generic(String),
 }
@@ -97,9 +99,9 @@ fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attemp
     let (mut server, _) = loop {
         match connect(url) {
             Ok(server) => break server,
-            Err(_e) => {
+            Err(e) => {
                 if retries > attempts {
-                    return Err(Fe2IoError::Generic("Attempts exhausted, bailing".to_owned()));
+                    return Err(Fe2IoError::WebSocket(e));
                 }
                 warn!("Failed to connect to server {}, retrying in {} seconds. {}/{}", url, delay, retries, attempts);
                 std::thread::sleep(std::time::Duration::from_secs(delay));
@@ -116,7 +118,10 @@ fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attemp
 fn handle_events(server: &mut WebSocket<MaybeTlsStream<TcpStream>>, sink: &Sink, args: &Args) -> Result<(), Fe2IoError> {
     let response = server.read()?;
     let response_as_text = response.to_text()?;
-    let msg: Msg = serde_json::from_str(response_as_text)?;
+    let msg: Msg = match json::from_str(response_as_text) {
+        Ok(msg) => msg,
+        Err(_) => return Err(Fe2IoError::Json(response_as_text.to_owned())), // miniserde errors are basically useless, so just return json directly
+    };
     match msg.msg_type.as_str() {
         "bgm" => play_audio(msg, &sink)?,
         "gameStatus" => handle_status(msg, &sink, &args)?,
