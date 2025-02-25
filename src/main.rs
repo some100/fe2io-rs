@@ -5,7 +5,7 @@ use rodio::{Sink, Decoder, OutputStream};
 use serde::Deserialize;
 use tungstenite::{WebSocket, connect, Message};
 use tungstenite::stream::MaybeTlsStream;
-use anyhow::{Context, anyhow, Result};
+use thiserror::Error;
 use log::{debug, info, warn, error};
 
 /// Lighterweight alternative for fe2.io
@@ -39,7 +39,25 @@ struct Msg {
     status_type: Option<String>,
 }
 
-fn main() -> Result<()> {
+#[derive(Error, Debug)]
+pub enum Fe2IoError {
+    #[error("WebSocket Error: {0}")]
+    WebSocket(#[from] tungstenite::Error),
+    #[error("JSON Error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Audio Decode Error: {0}")]
+    Decoder(#[from] rodio::decoder::DecoderError),
+    #[error("Audio Stream Error: {0}")]
+    Stream(#[from] rodio::StreamError),
+    #[error("Audio Player Error: {0}")]
+    Player(#[from] rodio::PlayError),
+    #[error("HTTP Request Error: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("Error: {0}")]
+    Generic(String),
+}
+
+fn main() -> Result<(), Fe2IoError> {
     let env = env_logger::Env::default().filter_or("LOG_LEVEL", "info");
     env_logger::init_from_env(env);
 
@@ -48,38 +66,32 @@ fn main() -> Result<()> {
         Ok(server) => server,
         Err(e) => {
             error!("{}", e);
-            return Ok(());
+            return Err(e);
         },
     };
 
-    let (_stream, stream_handle) = match OutputStream::try_default() {
-        Ok(stream) => stream,
-        Err(_e) => {
-            error!("Failed to open audio device, most likely because none are available");
-            return Ok(());
-        },
-    };
+    let (_stream, stream_handle) = OutputStream::try_default()?;
     let sink = Sink::try_new(&stream_handle)?;
 
     loop {
         match handle_events(&mut server, &sink, &args) {
-            Err(e) if e.to_string() == "Connection closed normally" => {
+            Err(Fe2IoError::WebSocket(_)) => { // if a websocket error happens in general (closed, io error, or already closed) we should probably try reconnecting anyways
                 warn!("Lost connection to server, attempting to reconnect");
                 server = match connect_to_server(&args.url, &args.username, args.delay, args.backoff, args.attempts) {
                     Ok(server) => server,
                     Err(e) => {
                         error!("{}", e);
-                        return Ok(());
+                        return Err(e);
                     },
                 };
             },
-            Err(e) => error!("Error: {}", e),
+            Err(e) => error!("{}", e),
             _ => (),
         }
     }
 }
 
-fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attempts: u64) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
+fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attempts: u64) -> Result<WebSocket<MaybeTlsStream<TcpStream>>, Fe2IoError> {
     let mut delay = delay;
     let mut retries = 1;
     let (mut server, _) = loop {
@@ -87,7 +99,7 @@ fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attemp
             Ok(server) => break server,
             Err(_e) => {
                 if retries > attempts {
-                    return Err(anyhow!("Attempts exhausted, exiting"));
+                    return Err(Fe2IoError::Generic("Attempts exhausted, bailing".to_owned()));
                 }
                 warn!("Failed to connect to server {}, retrying in {} seconds. {}/{}", url, delay, retries, attempts);
                 std::thread::sleep(std::time::Duration::from_secs(delay));
@@ -96,32 +108,28 @@ fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attemp
             }
         }
     };
-    server.send(Message::Text(username.into()))
-        .with_context(|| format!("Failed to connect to server {}", url))?;
+    server.send(Message::Text(username.into()))?;
     info!("Connected to server {} with username {}", url, username);
     Ok(server)
 }
 
-fn handle_events(server: &mut WebSocket<MaybeTlsStream<TcpStream>>, sink: &Sink, args: &Args) -> Result<()> {
+fn handle_events(server: &mut WebSocket<MaybeTlsStream<TcpStream>>, sink: &Sink, args: &Args) -> Result<(), Fe2IoError> {
     let response = server.read()?;
     let response_as_text = response.to_text()?;
-    let msg: Msg = serde_json::from_str(response_as_text)
-        .with_context(|| format!("Server sent invalid response {}", response_as_text))?;
-    let msg_type = msg.msg_type.as_str();
-    match msg_type {
+    let msg: Msg = serde_json::from_str(response_as_text)?;
+    match msg.msg_type.as_str() {
         "bgm" => play_audio(msg, &sink)?,
         "gameStatus" => handle_status(msg, &sink, &args)?,
-        _ => warn!("Server sent invalid msgType {}", msg_type),
+        _ => warn!("Server sent invalid msgType {}", msg.msg_type),
     };
     Ok(())
 }
 
-fn play_audio(msg: Msg, sink: &Sink) -> Result<()> {
+fn play_audio(msg: Msg, sink: &Sink) -> Result<(), Fe2IoError> {
     sink.stop();
     let url = msg.audio_url
-        .context("Server sent response of type bgm but no URL was provided")?;
-    let audio = reqwest::blocking::get(&url)
-        .with_context(|| format!("URL {} is invalid", url))?;
+        .ok_or(Fe2IoError::Generic("Server sent response of type bgm but no URL was provided".to_owned()))?;
+    let audio = reqwest::blocking::get(&url)?;
     let cursor = Cursor::new(audio.bytes()?);
     let source = Decoder::new(cursor)?;
     sink.append(source);
@@ -129,9 +137,9 @@ fn play_audio(msg: Msg, sink: &Sink) -> Result<()> {
     Ok(())
 }
 
-fn handle_status(msg: Msg, sink: &Sink, args: &Args) -> Result<()> {
+fn handle_status(msg: Msg, sink: &Sink, args: &Args) -> Result<(), Fe2IoError> {
     let status_type = msg.status_type
-        .context("Server sent response of type gameStatus but no status was provided")?;
+        .ok_or(Fe2IoError::Generic("Server sent response of type gameStatus but no status was provided".to_owned()))?;
     match status_type.as_str() {
         "died" => sink.set_volume(args.volume),
         "left" => sink.clear(),
