@@ -1,7 +1,7 @@
 use std::io::Cursor;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
-use tokio::sync::mpsc::{Sender, Receiver, channel};
+use tokio::sync::mpsc::{self, Sender, Receiver, channel};
 use futures_lite::StreamExt;
 use clap::Parser;
 use rodio::{Sink, Decoder, OutputStream};
@@ -35,7 +35,7 @@ struct Args {
     attempts: u64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct Msg {
     #[serde(rename = "msgType")]
     msg_type: String,
@@ -58,7 +58,7 @@ pub enum Fe2IoError {
     #[error("HTTP Request Error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("Send Error: {0}")]
-    Send(#[from] tokio::sync::mpsc::error::SendError<String>),
+    Send(#[from] mpsc::error::SendError<String>),
     #[error("IO Error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON Error: {0}")]
@@ -147,26 +147,26 @@ async fn handle_audio_inputs(sink: &Sink, rx: &mut Receiver<String>, args: &Args
     match input.as_str() {
         "died" => sink.set_volume(args.volume),
         "left" => sink.stop(),
-        _ => {
-            sink.stop();
-            let audio = reqwest::get(&input).await?;
-            if !audio.status().is_success() {
-                return Err(Fe2IoError::Generic(format!("URL {} returned error {}", input, audio.status())));
-            }
-            let cursor = Cursor::new(audio.bytes().await?);
-            let source = Decoder::new(cursor)?;
-            sink.append(source);
-        }
+        _ => play_audio(sink, &input).await?,
     }
+    Ok(())
+}
+
+async fn play_audio(sink: &Sink, input: &str) -> Result<(), Fe2IoError> {
+    sink.stop();
+    let audio = reqwest::get(input).await?;
+    if !audio.status().is_success() {
+        return Err(Fe2IoError::Generic(format!("URL {} returned error {}", input, audio.status())));
+    }
+    let cursor = Cursor::new(audio.bytes().await?);
+    let source = Decoder::new(cursor)?;
+    sink.append(source);
     Ok(())
 }
 
 async fn handle_events(server: &mut WebSocketStream<TokioAdapter<TcpStream>>, tx: Sender<String>) -> Result<(), Fe2IoError> {
     let response = read_server_response(server).await?;
-    let msg: Msg = match json::from_str(&response) {
-        Ok(msg) => msg,
-        Err(_) => return Err(Fe2IoError::Json(response)), // miniserde errors are basically useless, so just return json directly
-    };
+    let msg = parse_server_response(response).await?;
     match_server_response(msg, tx).await?;
     Ok(())
 }
@@ -178,6 +178,15 @@ async fn read_server_response(server: &mut WebSocketStream<TokioAdapter<TcpStrea
     };
     debug!("Received message {}", response);
     Ok(response.to_text()?.to_owned())
+}
+
+async fn parse_server_response(response: String) -> Result<Msg, Fe2IoError> {
+    let msg: Msg = match json::from_str(&response) {
+        Ok(msg) => msg,
+        Err(_) => return Err(Fe2IoError::Json(response)), // miniserde errors are basically useless, so just return json directly
+    };
+    debug!("Parsed message {:?}", msg);
+    Ok(msg)
 }
 
 async fn match_server_response(msg: Msg, tx: Sender<String>) -> Result<(), Fe2IoError> {
