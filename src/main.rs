@@ -1,14 +1,22 @@
-use std::io::Cursor;
-use tokio::net::TcpStream;
-use tokio::time::{sleep, Duration};
-use tokio::sync::mpsc::{self, Sender, Receiver, channel};
-use futures_lite::StreamExt;
+use std::{
+    io::Cursor,
+    cmp::min,
+};
+use tokio::{
+    net::TcpStream,
+    time::{sleep, Duration},
+    sync::mpsc::{self, Sender, Receiver, channel},
+};
+use tokio_tungstenite::{
+    WebSocketStream,
+    connect_async, 
+    MaybeTlsStream,
+    tungstenite::{self, Message},
+};
+use futures_util::{StreamExt, SinkExt};
 use clap::Parser;
 use rodio::{Sink, Decoder, OutputStream};
 use miniserde::{json, Deserialize};
-use async_tungstenite::{WebSocketStream, tungstenite};
-use async_tungstenite::tokio::{connect_async, TokioAdapter};
-use tungstenite::Message;
 use thiserror::Error;
 use log::{debug, info, warn, error};
 
@@ -116,7 +124,7 @@ async fn main() -> Result<(), Fe2IoError> {
     }
 }
 
-async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attempts: u64) -> Result<WebSocketStream<TokioAdapter<TcpStream>>, Fe2IoError> {
+async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attempts: u64) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Fe2IoError> {
     let mut delay = delay;
     let mut retries = 1;
     let (mut server, _) = loop {
@@ -131,7 +139,7 @@ async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, 
                 debug!("Failed to connect: {}", e);
                 warn!("Failed to connect to server {}, retrying in {} seconds. {}/{}", url, delay, retries, attempts);
                 sleep(Duration::from_secs(delay)).await;
-                delay = std::cmp::min(delay * backoff, 60);
+                delay = min(delay * backoff, 60);
                 retries += 1;
             }
         }
@@ -164,14 +172,14 @@ async fn play_audio(sink: &Sink, input: &str) -> Result<(), Fe2IoError> {
     Ok(())
 }
 
-async fn handle_events(server: &mut WebSocketStream<TokioAdapter<TcpStream>>, tx: Sender<String>) -> Result<(), Fe2IoError> {
+async fn handle_events(server: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, tx: Sender<String>) -> Result<(), Fe2IoError> {
     let response = read_server_response(server).await?;
     let msg = parse_server_response(response).await?;
     match_server_response(msg, tx).await?;
     Ok(())
 }
 
-async fn read_server_response(server: &mut WebSocketStream<TokioAdapter<TcpStream>>) -> Result<String, Fe2IoError> {
+async fn read_server_response(server: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) -> Result<String, Fe2IoError> {
     let response = match server.next().await {
         Some(response) => response?,
         None => return Err(Fe2IoError::WebSocket(tungstenite::Error::ConnectionClosed)),
