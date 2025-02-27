@@ -478,9 +478,10 @@ dependencies = [
  "env_logger",
  "futures-util",
  "log",
- "miniserde",
  "reqwest",
  "rodio",
+ "serde",
+ "serde_json",
  "thiserror 2.0.11",
  "tokio",
  "tokio-tungstenite",
@@ -1036,17 +1037,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
-name = "mini-internal"
-version = "0.1.41"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07b7f1340a7f0d2f89755aac4096f1c55352bfcb95cb8f351d6fcefa18df474f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1070,17 +1060,6 @@ dependencies = [
  "minimp3-sys",
  "slice-ring-buffer",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "miniserde"
-version = "0.1.41"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "625208b7bc90255fe6d99338041880bf48a3049166f46fbefbd4e9b0478c0b66"
-dependencies = [
- "itoa",
- "mini-internal",
- "ryu",
 ]
 
 [[package]]

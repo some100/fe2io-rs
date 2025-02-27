@@ -16,7 +16,8 @@ use tokio_tungstenite::{
 use futures_util::{StreamExt, SinkExt};
 use clap::Parser;
 use rodio::{Sink, Decoder, OutputStream};
-use miniserde::{json, Deserialize};
+use serde::Deserialize;
+use serde_json as json;
 use thiserror::Error;
 use log::{debug, info, warn, error};
 
@@ -45,11 +46,11 @@ struct Args {
 
 #[derive(Deserialize, Debug)]
 struct Msg {
-    #[serde(rename = "msgType")]
+    #[serde(alias = "msgType")]
     msg_type: String,
-    #[serde(rename = "audioUrl")]
+    #[serde(alias = "audioUrl")]
     audio_url: Option<String>,
-    #[serde(rename = "statusType")]
+    #[serde(alias = "statusType")]
     status_type: Option<String>,
 }
 
