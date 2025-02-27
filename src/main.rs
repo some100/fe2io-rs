@@ -71,7 +71,7 @@ pub enum Fe2IoError {
     #[error("IO Error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON Error: {0}")]
-    Json(String),
+    Json(#[from] json::Error),
     #[error("Error: {0}")]
     Generic(String),
 }
@@ -190,10 +190,7 @@ async fn read_server_response(server: &mut WebSocketStream<MaybeTlsStream<TcpStr
 }
 
 async fn parse_server_response(response: String) -> Result<Msg, Fe2IoError> {
-    let msg: Msg = match json::from_str(&response) {
-        Ok(msg) => msg,
-        Err(_) => return Err(Fe2IoError::Json(response)), // miniserde errors are basically useless, so just return json directly
-    };
+    let msg: Msg = json::from_str(&response)?;
     debug!("Parsed message {:?}", msg);
     Ok(msg)
 }
