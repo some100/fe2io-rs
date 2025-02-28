@@ -1,7 +1,4 @@
-use std::{
-    io::Cursor,
-    cmp::min,
-};
+use std::io::Cursor;
 use tokio::{
     net::TcpStream,
     time::{sleep, Duration},
@@ -126,13 +123,20 @@ async fn try_connect_to_server(url: &str, username: &str, delay: u64, backoff: u
                 debug!("Failed to connect: {}", e);
                 warn!("Failed to connect to server {}, retrying in {} seconds. {}/{}", url, delay, retries, attempts);
                 sleep(Duration::from_secs(delay)).await;
-                delay = min(delay * backoff, 60);
+                delay = (delay * backoff).min(60);
                 retries += 1;
             }
         }
     };
     server.send(Message::Text(username.into())).await?;
     info!("Connected to server {} with username {}", url, username);
+    Ok(server)
+}
+
+async fn reconnect_to_server(args: Args, e: Fe2IoError) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Fe2IoError> {
+    error!("{}", e);
+    warn!("Lost connection to server, attempting to reconnect");
+    let server = connect_to_server(&args.url, &args.username, args.delay, args.backoff, args.attempts).await?;
     Ok(server)
 }
 
@@ -171,12 +175,7 @@ async fn play_audio(sink: &Sink, input: &str) -> Result<(), Fe2IoError> {
 async fn event_loop(mut server: WebSocketStream<MaybeTlsStream<TcpStream>>, tx: Sender<String>, args: Args) -> Result<(), Fe2IoError> {
     loop {
         match handle_events(&mut server, tx.clone()).await {
-            Err(Fe2IoError::WebSocket(e)) => { // if a websocket error happens in general (closed, io error, or already closed) we should probably try reconnecting anyways
-                error!("{}", e);
-                drop(server);
-                warn!("Lost connection to server, attempting to reconnect");
-                server = connect_to_server(&args.url, &args.username, args.delay, args.backoff, args.attempts).await?;
-            },
+            Err(Fe2IoError::WebSocket(e)) => server = reconnect_to_server(args.clone(), Fe2IoError::WebSocket(e)).await?, // if a websocket error happens in general (closed, io error, or already closed) we should probably try reconnecting anyways
             Err(e) => error!("{}", e),
             _ => (),
         }
