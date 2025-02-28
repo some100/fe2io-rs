@@ -6,6 +6,7 @@ use tokio::{
     net::TcpStream,
     time::{sleep, Duration},
     sync::mpsc::{self, Sender, Receiver, channel},
+    task::{self, JoinSet},
 };
 use tokio_tungstenite::{
     WebSocketStream,
@@ -46,7 +47,7 @@ struct Args {
 
 #[derive(Deserialize, Debug)]
 struct Msg {
-    #[serde(alias = "msgType")]
+    #[serde(alias = "msgType")] // fe2io compat
     msg_type: String,
     #[serde(alias = "audioUrl")]
     audio_url: Option<String>,
@@ -70,6 +71,8 @@ pub enum Fe2IoError {
     Send(#[from] mpsc::error::SendError<String>),
     #[error("IO Error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Join Error: {0}")]
+    Join(#[from] task::JoinError),
     #[error("JSON Error: {0}")]
     Json(#[from] json::Error),
     #[error("Error: {0}")]
@@ -78,54 +81,37 @@ pub enum Fe2IoError {
 
 #[tokio::main]
 async fn main() -> Result<(), Fe2IoError> {
+    let mut tasks = JoinSet::new();
+
     let env = env_logger::Env::default().filter_or("LOG_LEVEL", "info");
     env_logger::init_from_env(env);
 
     let args = Args::parse();
-    let mut server = match connect_to_server(&args.url, &args.username, args.delay, args.backoff, args.attempts).await {
-        Ok(server) => server,
-        Err(e) => {
-            error!("{}", e);
-            return Err(e);
-        },
-    };
+
+    let server = connect_to_server(&args.url, &args.username, args.delay, args.backoff, args.attempts).await?;
 
     let (_stream, stream_handle) = OutputStream::try_default()?;
     let sink = Sink::try_new(&stream_handle)?;
 
-    let (tx, mut rx) = channel(4);
-
+    let (tx, rx) = channel(4);
     let args_clone = args.clone();
-    tokio::spawn(async move {
-        loop {
-            match handle_audio_inputs(&sink, &mut rx, &args_clone).await {
-                Err(e) => error!("{}", e),
-                _ => (),
-            }
-        }
-    });
-
-    loop {
-        match handle_events(&mut server, tx.clone()).await {
-            Err(Fe2IoError::WebSocket(e)) => { // if a websocket error happens in general (closed, io error, or already closed) we should probably try reconnecting anyways
-                error!("{}", e);
-                drop(server);
-                warn!("Lost connection to server, attempting to reconnect");
-                server = match connect_to_server(&args.url, &args.username, args.delay, args.backoff, args.attempts).await {
-                    Ok(server) => server,
-                    Err(e) => {
-                        error!("{}", e);
-                        return Err(e);
-                    },
-                };
-            },
-            Err(e) => error!("{}", e),
-            _ => (),
-        }
-    }
+    tasks.spawn(audio_loop(sink, rx, args_clone));
+    tasks.spawn(event_loop(server, tx, args));
+    wait_for_tasks(tasks).await?;
+    Ok(())
 }
 
 async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attempts: u64) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Fe2IoError> {
+    match try_connect_to_server(url, username, delay, backoff, attempts).await {
+        Ok(server) => Ok(server),
+        Err(e) => {
+            error!("{}", e);
+            return Err(e);
+        },
+    }
+}
+
+async fn try_connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attempts: u64) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Fe2IoError> {
     let mut delay = delay;
     let mut retries = 1;
     let (mut server, _) = loop {
@@ -150,6 +136,15 @@ async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, 
     Ok(server)
 }
 
+async fn audio_loop(sink: Sink, mut rx: Receiver<String>, args: Args) -> Result<(), Fe2IoError> {
+    loop {
+        match handle_audio_inputs(&sink, &mut rx, &args).await {
+            Err(e) => error!("{}", e),
+            _ => (),
+        }
+    }
+}
+
 async fn handle_audio_inputs(sink: &Sink, rx: &mut Receiver<String>, args: &Args) -> Result<(), Fe2IoError> {
     let input = rx.recv().await
         .ok_or(Fe2IoError::Generic("Failed to receive inputs".to_owned()))?;
@@ -171,6 +166,21 @@ async fn play_audio(sink: &Sink, input: &str) -> Result<(), Fe2IoError> {
     let source = Decoder::new(cursor)?;
     sink.append(source);
     Ok(())
+}
+
+async fn event_loop(mut server: WebSocketStream<MaybeTlsStream<TcpStream>>, tx: Sender<String>, args: Args) -> Result<(), Fe2IoError> {
+    loop {
+        match handle_events(&mut server, tx.clone()).await {
+            Err(Fe2IoError::WebSocket(e)) => { // if a websocket error happens in general (closed, io error, or already closed) we should probably try reconnecting anyways
+                error!("{}", e);
+                drop(server);
+                warn!("Lost connection to server, attempting to reconnect");
+                server = connect_to_server(&args.url, &args.username, args.delay, args.backoff, args.attempts).await?;
+            },
+            Err(e) => error!("{}", e),
+            _ => (),
+        }
+    }
 }
 
 async fn handle_events(server: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, tx: Sender<String>) -> Result<(), Fe2IoError> {
@@ -217,5 +227,20 @@ async fn get_status(msg: Msg, tx: Sender<String>) -> Result<(), Fe2IoError> {
         .ok_or(Fe2IoError::Generic("Server sent response of type gameStatus but no status was provided".to_owned()))?;
     debug!("Set game status to {}", status_type);
     tx.send(status_type).await?;
+    Ok(())
+}
+
+async fn wait_for_tasks(mut tasks: JoinSet<Result<(), Fe2IoError>>) -> Result<(), Fe2IoError> {
+    match tasks.join_next().await {
+        Some(Err(e)) => { 
+            error!("{}", e);
+            return Err(Fe2IoError::Join(e));
+        },
+        None => {
+            error!("Somehow, no tasks were spawned"); // something really bad must have happened for this to be the case
+            return Err(Fe2IoError::Generic("No tasks spawned".to_owned()));
+        },
+        _ => warn!("At least one task exited, ending program"),
+    }
     Ok(())
 }
