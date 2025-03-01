@@ -30,6 +30,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt install -y libasound2-dev
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: fe2io-rs
