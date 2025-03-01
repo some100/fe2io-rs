@@ -31,6 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt install -y libasound2-dev
+        if: runner.os == 'Linux'
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: fe2io-rs
