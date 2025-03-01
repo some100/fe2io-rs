@@ -6,9 +6,9 @@ Lighterweight alternative to fe2.io written in Rust
 
 Run `fe2io-rs --help` and see what happens.
 
-- Username is required. It is the player's username.
-- Volume is optional, and is the volume of the audio on death. Default is 0.5
-- URL is optional, and is the server the application connects to. Default is `ws://client.fe2.io:8081`
+- Username is required. It is the player's username. This is case sensitive.
+- Volume is optional, and is the volume of the audio on death. Default is 0.5.
+- URL is optional, and is the server the application connects to. Default is `ws://client.fe2.io:8081`, but will connect to any WebSocket server.
 
 ## Use case
 
