@@ -15,7 +15,6 @@ use futures_util::{StreamExt, SinkExt};
 use clap::Parser;
 use rodio::{Sink, Decoder, OutputStream};
 use serde::Deserialize;
-use serde_json as json;
 use thiserror::Error;
 use log::{debug, info, warn, error};
 
@@ -71,7 +70,7 @@ pub enum Fe2IoError {
     #[error("Join Error: {0}")]
     Join(#[from] task::JoinError),
     #[error("JSON Error: {0}")]
-    Json(#[from] json::Error),
+    Json(#[from] serde_json::Error),
     #[error("Failed to receive inputs")]
     RecvClosed(),
     #[error("Error: {0}")]
@@ -201,7 +200,7 @@ async fn read_server_response(server: &mut WebSocketStream<MaybeTlsStream<TcpStr
 }
 
 async fn parse_server_response(response: String) -> Result<Msg, Fe2IoError> {
-    let msg: Msg = json::from_str(&response)?;
+    let msg: Msg = serde_json::from_str(&response)?;
     debug!("Parsed message {:?}", msg);
     Ok(msg)
 }
