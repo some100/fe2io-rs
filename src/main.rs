@@ -72,6 +72,8 @@ pub enum Fe2IoError {
     Join(#[from] task::JoinError),
     #[error("JSON Error: {0}")]
     Json(#[from] json::Error),
+    #[error("Failed to receive inputs")]
+    RecvClosed(),
     #[error("Error: {0}")]
     Generic(String),
 }
@@ -94,32 +96,29 @@ async fn main() -> Result<(), Fe2IoError> {
     let args_clone = args.clone();
     tasks.spawn(audio_loop(sink, rx, args_clone));
     tasks.spawn(event_loop(server, tx, args));
-    wait_for_tasks(tasks).await?;
+
+    tokio::select! {
+        _ = wait_for_tasks(&mut tasks) => (),
+        _ = tokio::signal::ctrl_c() => {
+            warn!("Received interrupt, exiting");
+            tasks.shutdown().await;
+        }
+    }
     Ok(())
 }
 
 async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attempts: u64) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Fe2IoError> {
-    match try_connect_to_server(url, username, delay, backoff, attempts).await {
-        Ok(server) => Ok(server),
-        Err(e) => {
-            error!("{}", e);
-            return Err(e);
-        },
-    }
-}
-
-async fn try_connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, attempts: u64) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Fe2IoError> {
     let mut delay = delay;
     let mut retries = 1;
     let (mut server, _) = loop {
         match connect_async(url).await {
             Ok(server) => break server,
             Err(tungstenite::Error::Url(e)) => return Err(Fe2IoError::WebSocket(tungstenite::Error::Url(e))), // if url is invalid, dont bother retrying since theres no hope of it working
+            Err(e) if retries > attempts => {
+                error!("Failed to connect after {} attempts, bailing", attempts);
+                return Err(Fe2IoError::WebSocket(e));
+            },
             Err(e) => {
-                if retries > attempts {
-                    error!("Failed to connect after {} attempts, bailing", attempts);
-                    return Err(Fe2IoError::WebSocket(e));
-                }
                 debug!("Failed to connect: {}", e);
                 warn!("Failed to connect to server {}, retrying in {} seconds. {}/{}", url, delay, retries, attempts);
                 sleep(Duration::from_secs(delay)).await;
@@ -133,16 +132,19 @@ async fn try_connect_to_server(url: &str, username: &str, delay: u64, backoff: u
     Ok(server)
 }
 
-async fn reconnect_to_server(args: Args, e: Fe2IoError) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Fe2IoError> {
+async fn reconnect_to_server(args: &Args, e: Fe2IoError) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Fe2IoError> {
     error!("{}", e);
     warn!("Lost connection to server, attempting to reconnect");
-    let server = connect_to_server(&args.url, &args.username, args.delay, args.backoff, args.attempts).await?;
-    Ok(server)
+    connect_to_server(&args.url, &args.username, args.delay, args.backoff, args.attempts).await
 }
 
 async fn audio_loop(sink: Sink, mut rx: Receiver<String>, args: Args) -> Result<(), Fe2IoError> {
     loop {
         match handle_audio_inputs(&sink, &mut rx, &args).await {
+            Err(Fe2IoError::RecvClosed()) => {
+                error!("Audio receiver channels closed");
+                return Err(Fe2IoError::RecvClosed()); // this is not a recoverable error, so just return from loop
+            },
             Err(e) => error!("{}", e),
             _ => (),
         }
@@ -151,7 +153,7 @@ async fn audio_loop(sink: Sink, mut rx: Receiver<String>, args: Args) -> Result<
 
 async fn handle_audio_inputs(sink: &Sink, rx: &mut Receiver<String>, args: &Args) -> Result<(), Fe2IoError> {
     let input = rx.recv().await
-        .ok_or(Fe2IoError::Generic("Failed to receive inputs".to_owned()))?;
+        .ok_or(Fe2IoError::RecvClosed())?;
     match input.as_str() {
         "died" => sink.set_volume(args.volume),
         "left" => sink.stop(),
@@ -164,7 +166,7 @@ async fn play_audio(sink: &Sink, input: &str) -> Result<(), Fe2IoError> {
     sink.stop();
     let audio = reqwest::get(input).await?;
     if !audio.status().is_success() {
-        return Err(Fe2IoError::Generic(format!("URL {} returned error {}", input, audio.status())));
+        return Err(Fe2IoError::Generic(format!("URL {} returned error status {}", input, audio.status())));
     }
     let cursor = Cursor::new(audio.bytes().await?);
     let source = Decoder::new(cursor)?;
@@ -175,7 +177,7 @@ async fn play_audio(sink: &Sink, input: &str) -> Result<(), Fe2IoError> {
 async fn event_loop(mut server: WebSocketStream<MaybeTlsStream<TcpStream>>, tx: Sender<String>, args: Args) -> Result<(), Fe2IoError> {
     loop {
         match handle_events(&mut server, tx.clone()).await {
-            Err(Fe2IoError::WebSocket(e)) => server = reconnect_to_server(args.clone(), Fe2IoError::WebSocket(e)).await?, // if a websocket error happens in general (closed, io error, or already closed) we should probably try reconnecting anyways
+            Err(Fe2IoError::WebSocket(e)) => server = reconnect_to_server(&args, Fe2IoError::WebSocket(e)).await?, // if a websocket error happens in general (closed, io error, or already closed) we should probably try reconnecting anyways
             Err(e) => error!("{}", e),
             _ => (),
         }
@@ -229,7 +231,7 @@ async fn get_status(msg: Msg, tx: Sender<String>) -> Result<(), Fe2IoError> {
     Ok(())
 }
 
-async fn wait_for_tasks(mut tasks: JoinSet<Result<(), Fe2IoError>>) -> Result<(), Fe2IoError> {
+async fn wait_for_tasks(tasks: &mut JoinSet<Result<(), Fe2IoError>>) -> Result<(), Fe2IoError> {
     match tasks.join_next().await {
         Some(Err(e)) => { 
             error!("{}", e);
