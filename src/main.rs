@@ -72,7 +72,7 @@ pub enum Fe2IoError {
     Join(#[from] task::JoinError),
     #[error("JSON Error: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("Failed")]
+    #[error("Failed to connect after allowed attempts")]
     NoRetry(),
     #[error("Failed to receive inputs")]
     RecvClosed(),
@@ -115,14 +115,10 @@ async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, 
         match connect_async(url).await {
             Ok(server) => break server,
             Err(tungstenite::Error::Url(e)) => return Err(Fe2IoError::WebSocket(tungstenite::Error::Url(e))), // if url is invalid, dont bother retrying since theres no hope of it working
-            Err(e) if retries > attempts => {
-                error!("Failed to connect after {} attempts, bailing", attempts);
-                return Err(Fe2IoError::WebSocket(e));
-            },
             Err(e) => {
                 warn!("Failed to connect to server {}, retrying in {} seconds. {}/{}", url, delay, retries, attempts);
                 debug!("Failed to connect: {}", e);
-                delay_reconnect(&mut delay, backoff, &mut retries).await?;
+                delay_reconnect(&mut delay, backoff, attempts, &mut retries).await?;
             }
         }
     };
@@ -131,7 +127,11 @@ async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, 
     Ok(server)
 }
 
-async fn delay_reconnect(delay: &mut u64, backoff: u64, retries: &mut u64) -> Result<(), Fe2IoError> {
+async fn delay_reconnect(delay: &mut u64, backoff: u64, attempts: u64, retries: &mut u64) -> Result<(), Fe2IoError> {
+    if *retries > attempts {
+        error!("Failed to connect to server after {} attempts, bailing", attempts);
+        return Err(Fe2IoError::NoRetry());
+    }
     sleep(Duration::from_secs(*delay)).await;
     *delay = (*delay * backoff).min(60);
     *retries += 1;
