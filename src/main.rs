@@ -71,6 +71,8 @@ pub enum Fe2IoError {
     Join(#[from] task::JoinError),
     #[error("JSON Error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("Failed")]
+    NoRetry(),
     #[error("Failed to receive inputs")]
     RecvClosed(),
     #[error("Error: {0}")]
@@ -92,8 +94,7 @@ async fn main() -> Result<(), Fe2IoError> {
     let sink = Sink::try_new(&stream_handle)?;
 
     let (tx, rx) = channel(4);
-    let args_clone = args.clone();
-    tasks.spawn(audio_loop(sink, rx, args_clone));
+    tasks.spawn(audio_loop(sink, rx, args.clone()));
     tasks.spawn(event_loop(server, tx, args));
 
     tokio::select! {
@@ -118,17 +119,22 @@ async fn connect_to_server(url: &str, username: &str, delay: u64, backoff: u64, 
                 return Err(Fe2IoError::WebSocket(e));
             },
             Err(e) => {
-                debug!("Failed to connect: {}", e);
                 warn!("Failed to connect to server {}, retrying in {} seconds. {}/{}", url, delay, retries, attempts);
-                sleep(Duration::from_secs(delay)).await;
-                delay = (delay * backoff).min(60);
-                retries += 1;
+                debug!("Failed to connect: {}", e);
+                delay_reconnect(&mut delay, backoff, &mut retries).await?;
             }
         }
     };
     server.send(Message::Text(username.into())).await?;
     info!("Connected to server {} with username {}", url, username);
     Ok(server)
+}
+
+async fn delay_reconnect(delay: &mut u64, backoff: u64, retries: &mut u64) -> Result<(), Fe2IoError> {
+    sleep(Duration::from_secs(*delay)).await;
+    *delay = (*delay * backoff).min(60);
+    *retries += 1;
+    Ok(())
 }
 
 async fn reconnect_to_server(args: &Args, e: Fe2IoError) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Fe2IoError> {
