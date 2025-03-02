@@ -16,6 +16,7 @@ use clap::Parser;
 use rodio::{Sink, Decoder, OutputStream};
 use serde::Deserialize;
 use thiserror::Error;
+use reqwest::Client;
 use log::{debug, info, warn, error};
 
 /// Lighterweight alternative for fe2.io
@@ -144,8 +145,9 @@ async fn reconnect_to_server(args: &Args, e: Fe2IoError) -> Result<WebSocketStre
 }
 
 async fn audio_loop(sink: Sink, mut rx: Receiver<String>, args: Args) -> Result<(), Fe2IoError> {
+    let client = Client::new();
     loop {
-        match handle_audio_inputs(&sink, &mut rx, &args).await {
+        match handle_audio_inputs(&sink, &mut rx, &client, &args).await {
             Err(Fe2IoError::RecvClosed()) => {
                 error!("Audio receiver channels closed");
                 return Err(Fe2IoError::RecvClosed()); // this is not a recoverable error, so just return from loop
@@ -156,20 +158,22 @@ async fn audio_loop(sink: Sink, mut rx: Receiver<String>, args: Args) -> Result<
     }
 }
 
-async fn handle_audio_inputs(sink: &Sink, rx: &mut Receiver<String>, args: &Args) -> Result<(), Fe2IoError> {
+async fn handle_audio_inputs(sink: &Sink, rx: &mut Receiver<String>, client: &Client, args: &Args) -> Result<(), Fe2IoError> {
     let input = rx.recv().await
         .ok_or(Fe2IoError::RecvClosed())?;
     match input.as_str() {
         "died" => sink.set_volume(args.volume),
         "left" => sink.stop(),
-        _ => play_audio(sink, &input).await?,
+        _ => play_audio(sink, client, &input).await?,
     }
     Ok(())
 }
 
-async fn play_audio(sink: &Sink, input: &str) -> Result<(), Fe2IoError> {
+async fn play_audio(sink: &Sink, client: &Client, input: &str) -> Result<(), Fe2IoError> {
     sink.stop();
-    let audio = reqwest::get(input).await?;
+    let audio = client.get(input)
+        .send()
+        .await?;
     if !audio.status().is_success() {
         return Err(Fe2IoError::Generic(format!("URL {} returned error status {}", input, audio.status())));
     }
