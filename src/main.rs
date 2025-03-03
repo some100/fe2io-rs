@@ -47,7 +47,7 @@ struct Args {
 #[derive(Deserialize, Debug)]
 struct Msg {
     #[serde(alias = "msgType")] // fe2io compat
-    msg_type: String,
+    type_: String,
     #[serde(alias = "audioUrl")]
     audio_url: Option<String>,
     #[serde(alias = "statusType")]
@@ -95,7 +95,7 @@ fn main() -> Result<(), Fe2IoError> {
     let (tx, rx) = channel();
     let args_clone = args.clone();
     spawn(move || {
-        audio_loop(&sink, rx, &args_clone)
+        audio_loop(&sink, &rx, &args_clone)
     });
     event_loop(server, &tx, &args)?;
     Ok(())
@@ -136,10 +136,10 @@ fn reconnect_to_server(args: &Args) -> Result<WebSocket<MaybeTlsStream<TcpStream
     connect_to_server(args)
 }
 
-fn audio_loop(sink: &Sink, mut rx: Receiver<String>, args: &Args) -> Result<(), Fe2IoError> {
+fn audio_loop(sink: &Sink, rx: &Receiver<String>, args: &Args) -> Result<(), Fe2IoError> {
     let agent = agent();
     loop {
-        match handle_audio_inputs(sink, &mut rx, &agent, args) {
+        match handle_audio_inputs(sink, rx, &agent, args) {
             Err(Fe2IoError::RecvClosed()) => {
                 error!("Audio receiver channels closed");
                 return Err(Fe2IoError::RecvClosed()); // this is not a recoverable error, so just return from loop
@@ -150,7 +150,7 @@ fn audio_loop(sink: &Sink, mut rx: Receiver<String>, args: &Args) -> Result<(), 
     }
 }
 
-fn handle_audio_inputs(sink: &Sink, rx: &mut Receiver<String>, agent: &Agent, args: &Args) -> Result<(), Fe2IoError> {
+fn handle_audio_inputs(sink: &Sink, rx: &Receiver<String>, agent: &Agent, args: &Args) -> Result<(), Fe2IoError> {
     let input = rx.recv()?;
     match input.as_str() {
         "died" => sink.set_volume(args.volume),
@@ -207,10 +207,10 @@ fn parse_server_response(response: &str) -> Result<Msg, Fe2IoError> {
 }
 
 fn match_server_response(msg: Msg, tx: &Sender<String>) -> Result<(), Fe2IoError> {
-    match msg.msg_type.as_str() {
+    match msg.type_.as_str() {
         "bgm" => get_audio(msg, tx)?,
         "gameStatus" => get_status(msg, tx)?,
-        _ => warn!("Server sent invalid msgType {}", msg.msg_type),
+        _ => warn!("Server sent invalid msgType {}", msg.type_),
     };
     Ok(())
 }
