@@ -47,8 +47,8 @@ struct Args {
 
 #[derive(Deserialize, Debug)]
 struct Msg {
-    #[serde(alias = "msgType")] // fe2io compat
-    msg_type: String,
+    #[serde(alias = "msg_type", alias = "msgType")] // fe2io compat (also clippy pedantic wouldnt stop complaining)
+    type_: String,
     #[serde(alias = "audioUrl")]
     audio_url: Option<String>,
     #[serde(alias = "statusType")]
@@ -223,10 +223,10 @@ fn parse_server_response(response: &str) -> Result<Msg, Fe2IoError> {
 }
 
 async fn match_server_response(msg: Msg, tx: Sender<String>) -> Result<(), Fe2IoError> {
-    match msg.msg_type.as_str() {
+    match msg.type_.as_str() {
         "bgm" => get_audio(msg, tx).await?,
         "gameStatus" => get_status(msg, tx).await?,
-        _ => warn!("Server sent invalid msgType {}", msg.msg_type),
+        _ => warn!("Server sent invalid msgType {}", msg.type_),
     };
     Ok(())
 }
