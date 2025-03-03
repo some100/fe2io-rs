@@ -46,7 +46,7 @@ struct Args {
 
 #[derive(Deserialize, Debug)]
 struct Msg {
-    #[serde(alias = "msgType")] // fe2io compat
+    #[serde(alias = "msg_type", alias = "msgType")] // fe2io compat
     type_: String,
     #[serde(alias = "audioUrl")]
     audio_url: Option<String>,
