@@ -31,6 +31,7 @@ async fn handle_audio_inputs(sink: &Sink, rx: &mut Receiver<String>, client: &Cl
 }
 
 async fn play_audio(sink: &Sink, client: &Client, input: &str) -> Result<(), Fe2IoError> {
+    sink.set_volume(1.0); // Volume is set to 1.0 by default. If this is too low or too high, you can manually change your volume
     sink.stop();
     let audio = client.get(input)
         .send()
