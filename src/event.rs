@@ -1,13 +1,14 @@
-use crate::{Fe2IoError, Args, Msg, websocket};
-use tokio::{
-    net::TcpStream,
-    sync::mpsc::Sender,
-};
-use tokio_tungstenite::{WebSocketStream, MaybeTlsStream};
+use crate::{websocket, Args, Fe2IoError, Msg};
 use futures_util::StreamExt;
-use log::{debug, warn, error};
+use log::{debug, error, warn};
+use tokio::{net::TcpStream, sync::mpsc::Sender};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-pub async fn event_loop(mut server: WebSocketStream<MaybeTlsStream<TcpStream>>, tx: Sender<String>, args: Args) -> Result<(), Fe2IoError> {
+pub async fn event_loop(
+    mut server: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    tx: Sender<String>,
+    args: Args,
+) -> Result<(), Fe2IoError> {
     loop {
         match handle_events(&mut server, tx.clone()).await {
             Err(Fe2IoError::Reconnect()) => server = websocket::reconnect_to_server(&args).await?,
@@ -18,14 +19,19 @@ pub async fn event_loop(mut server: WebSocketStream<MaybeTlsStream<TcpStream>>, 
     }
 }
 
-async fn handle_events(server: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, tx: Sender<String>) -> Result<(), Fe2IoError> {
+async fn handle_events(
+    server: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    tx: Sender<String>,
+) -> Result<(), Fe2IoError> {
     let response = read_server_response(server).await?;
     let msg = parse_server_response(&response)?;
     match_server_response(msg, tx).await?;
     Ok(())
 }
 
-async fn read_server_response(server: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) -> Result<String, Fe2IoError> {
+async fn read_server_response(
+    server: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+) -> Result<String, Fe2IoError> {
     let response = match server.next().await {
         Some(response) => response?,
         None => return Err(Fe2IoError::Reconnect()),
@@ -50,16 +56,18 @@ async fn match_server_response(msg: Msg, tx: Sender<String>) -> Result<(), Fe2Io
 }
 
 async fn get_audio(msg: Msg, tx: Sender<String>) -> Result<(), Fe2IoError> {
-    let url = msg.audio_url
-        .ok_or(Fe2IoError::Invalid("Server sent response of type bgm but no URL was provided".to_owned()))?;
+    let url = msg.audio_url.ok_or(Fe2IoError::Invalid(
+        "Server sent response of type bgm but no URL was provided".to_owned(),
+    ))?;
     debug!("Playing audio {}", url);
     tx.send(url).await?;
     Ok(())
 }
 
 async fn get_status(msg: Msg, tx: Sender<String>) -> Result<(), Fe2IoError> {
-    let status_type = msg.status_type
-        .ok_or(Fe2IoError::Invalid("Server sent response of type gameStatus but no status was provided".to_owned()))?;
+    let status_type = msg.status_type.ok_or(Fe2IoError::Invalid(
+        "Server sent response of type gameStatus but no status was provided".to_owned(),
+    ))?;
     debug!("Set game status to {}", status_type);
     tx.send(status_type).await?;
     Ok(())

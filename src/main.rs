@@ -1,18 +1,14 @@
 mod audio;
+mod error;
 mod event;
 mod websocket;
-mod error;
 
 use crate::error::Fe2IoError;
-use tokio::{
-    sync::mpsc::channel,
-    signal::ctrl_c,
-    task::JoinSet,
-};
 use clap::Parser;
-use rodio::{Sink, OutputStream};
-use serde::Deserialize;
 use log::warn;
+use rodio::{OutputStream, Sink};
+use serde::Deserialize;
+use tokio::{signal::ctrl_c, sync::mpsc::channel, task::JoinSet};
 
 /// Lighterweight alternative for fe2.io
 #[derive(Parser, Clone)]
@@ -42,7 +38,8 @@ struct Args {
 
 #[derive(Deserialize, Debug)]
 struct Msg {
-    #[serde(alias = "msg_type", alias = "msgType")] // fe2io compat (also clippy pedantic wouldnt stop complaining)
+    #[serde(alias = "msg_type", alias = "msgType")]
+    // fe2io compat (also clippy pedantic wouldnt stop complaining)
     type_: String,
     #[serde(alias = "audioUrl")]
     audio_url: Option<String>,
