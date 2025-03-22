@@ -43,7 +43,11 @@ fn change_status(sink: &Sink, input: &str, args: &Args) -> Result<(), Fe2IoError
     match input {
         "died" => sink.set_volume(args.volume),
         "left" => sink.stop(),
-        _ => return Err(Fe2IoError::Invalid(format!("Got invalid status type {input}"))),
+        _ => {
+            return Err(Fe2IoError::Invalid(format!(
+                "Got invalid status type {input}"
+            )))
+        }
     }
     Ok(())
 }

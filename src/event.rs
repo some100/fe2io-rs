@@ -10,7 +10,7 @@ pub async fn event_loop(
     args: Args,
 ) -> Result<(), Fe2IoError> {
     loop {
-        match handle_events(&mut server, tx.clone()).await {
+        match handle_events(&mut server, &tx).await {
             Err(Fe2IoError::Reconnect()) => server = websocket::reconnect_to_server(&args).await?,
             Err(Fe2IoError::Send(e)) => return Err(Fe2IoError::Send(e)),
             Err(e) => error!("{e}"),
@@ -21,7 +21,7 @@ pub async fn event_loop(
 
 async fn handle_events(
     server: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-    tx: Sender<MsgValue>,
+    tx: &Sender<MsgValue>,
 ) -> Result<(), Fe2IoError> {
     let response = read_server_response(server).await?;
     let msg = parse_server_response(&response)?;
@@ -46,7 +46,7 @@ fn parse_server_response(response: &str) -> Result<Msg, Fe2IoError> {
     Ok(msg)
 }
 
-async fn match_server_response(msg: Msg, tx: Sender<MsgValue>) -> Result<(), Fe2IoError> {
+async fn match_server_response(msg: Msg, tx: &Sender<MsgValue>) -> Result<(), Fe2IoError> {
     match msg.type_.as_str() {
         "bgm" => get_audio(msg, tx).await?,
         "gameStatus" => get_status(msg, tx).await?,
@@ -55,7 +55,7 @@ async fn match_server_response(msg: Msg, tx: Sender<MsgValue>) -> Result<(), Fe2
     Ok(())
 }
 
-async fn get_audio(msg: Msg, tx: Sender<MsgValue>) -> Result<(), Fe2IoError> {
+async fn get_audio(msg: Msg, tx: &Sender<MsgValue>) -> Result<(), Fe2IoError> {
     let url = msg.audio_url.ok_or(Fe2IoError::Invalid(
         "Server sent response of type bgm but no URL was provided".to_owned(),
     ))?;
@@ -64,7 +64,7 @@ async fn get_audio(msg: Msg, tx: Sender<MsgValue>) -> Result<(), Fe2IoError> {
     Ok(())
 }
 
-async fn get_status(msg: Msg, tx: Sender<MsgValue>) -> Result<(), Fe2IoError> {
+async fn get_status(msg: Msg, tx: &Sender<MsgValue>) -> Result<(), Fe2IoError> {
     let status_type = msg.status_type.ok_or(Fe2IoError::Invalid(
         "Server sent response of type gameStatus but no status was provided".to_owned(),
     ))?;
