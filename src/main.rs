@@ -47,6 +47,11 @@ struct Msg {
     status_type: Option<String>,
 }
 
+enum MsgValue {
+    Volume(String),
+    Audio(String),
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Fe2IoError> {
     let mut tasks = JoinSet::new();

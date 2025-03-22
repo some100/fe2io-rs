@@ -1,4 +1,4 @@
-use crate::{Args, Fe2IoError};
+use crate::{Args, Fe2IoError, MsgValue};
 use log::error;
 use reqwest::Client;
 use rodio::{Decoder, Sink};
@@ -7,7 +7,7 @@ use tokio::{sync::mpsc::Receiver, time::Duration};
 
 pub async fn audio_loop(
     sink: Sink,
-    mut rx: Receiver<String>,
+    mut rx: Receiver<MsgValue>,
     args: Args,
 ) -> Result<(), Fe2IoError> {
     let client = Client::builder()
@@ -19,7 +19,7 @@ pub async fn audio_loop(
                 error!("Audio receiver channels closed");
                 return Err(Fe2IoError::RecvClosed()); // this is not a recoverable error, so just return from loop
             }
-            Err(e) => error!("{}", e),
+            Err(e) => error!("{e}"),
             _ => (),
         }
     }
@@ -27,15 +27,23 @@ pub async fn audio_loop(
 
 async fn handle_audio_inputs(
     sink: &Sink,
-    rx: &mut Receiver<String>,
+    rx: &mut Receiver<MsgValue>,
     client: &Client,
     args: &Args,
 ) -> Result<(), Fe2IoError> {
     let input = rx.recv().await.ok_or(Fe2IoError::RecvClosed())?;
-    match input.as_str() {
+    match input {
+        MsgValue::Volume(input) => change_status(sink, &input, args)?,
+        MsgValue::Audio(input) => play_audio(sink, client, &input).await?,
+    }
+    Ok(())
+}
+
+fn change_status(sink: &Sink, input: &str, args: &Args) -> Result<(), Fe2IoError> {
+    match input {
         "died" => sink.set_volume(args.volume),
         "left" => sink.stop(),
-        _ => play_audio(sink, client, &input).await?,
+        _ => return Err(Fe2IoError::Invalid(format!("Got invalid status type {input}"))),
     }
     Ok(())
 }

@@ -13,7 +13,7 @@ pub enum Fe2IoError {
     #[error("HTTP Request Error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("Send Error: {0}")]
-    Send(#[from] tokio::sync::mpsc::error::SendError<String>),
+    Send(#[from] tokio::sync::mpsc::error::SendError<crate::MsgValue>),
     #[error("IO Error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Join Error: {0}")]

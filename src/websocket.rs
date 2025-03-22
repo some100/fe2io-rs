@@ -25,7 +25,7 @@ pub async fn connect_to_server(
                     "Failed to connect to server {}, retrying in {} seconds. {}/{}",
                     args.url, delay, retries, args.attempts
                 );
-                debug!("Failed to connect: {}", e);
+                debug!("Failed to connect: {e}");
                 (delay, retries) = delay_reconnect(delay, retries, args).await?;
             }
         }
