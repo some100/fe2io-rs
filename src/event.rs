@@ -32,9 +32,8 @@ async fn handle_events(
 async fn read_server_response(
     server: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
 ) -> Result<String, Fe2IoError> {
-    let response = match server.next().await {
-        Some(response) => response?,
-        None => return Err(Fe2IoError::Reconnect()),
+    let Some(Ok(response)) = server.next().await else {
+        return Err(Fe2IoError::Reconnect());
     };
     debug!("Received message {response}");
     Ok(response.to_text()?.to_owned())

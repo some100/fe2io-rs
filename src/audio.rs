@@ -15,10 +15,7 @@ pub async fn audio_loop(
         .build()?;
     loop {
         match handle_audio_inputs(&sink, &mut rx, &client, &args).await {
-            Err(Fe2IoError::RecvClosed()) => {
-                error!("Audio receiver channels closed");
-                return Err(Fe2IoError::RecvClosed()); // this is not a recoverable error, so just return from loop
-            }
+            Err(Fe2IoError::RecvClosed()) => return Err(Fe2IoError::RecvClosed()), // this is not a recoverable error, so just return from loop
             Err(e) => error!("{e}"),
             _ => (),
         }
@@ -43,7 +40,7 @@ fn change_status(sink: &Sink, input: &str, args: &Args) -> Result<(), Fe2IoError
     match input {
         "died" => sink.set_volume(args.volume),
         "left" => sink.stop(),
-        _ => {
+        input => {
             return Err(Fe2IoError::Invalid(format!(
                 "Got invalid status type {input}"
             )))
@@ -56,10 +53,7 @@ async fn play_audio(sink: &Sink, client: &Client, input: &str) -> Result<(), Fe2
     sink.set_volume(1.0); // Volume is set to 1.0 by default. If this is too low or too high, you can manually change your volume
     sink.stop();
     let response = client.get(input).send().await?;
-    let audio = match response.error_for_status() {
-        Ok(audio) => audio,
-        Err(e) => return Err(Fe2IoError::Http(e)),
-    };
+    let audio = response.error_for_status()?;
     let cursor = Cursor::new(audio.bytes().await?);
     let source = Decoder::new(cursor)?;
     sink.append(source);

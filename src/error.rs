@@ -28,6 +28,6 @@ pub enum Fe2IoError {
     NoTasks(),
     #[error("Failed to connect after allowed attempts")]
     NoRetry(),
-    #[error("Failed to receive inputs")]
+    #[error("Audio receiver channels closed")]
     RecvClosed(),
 }
