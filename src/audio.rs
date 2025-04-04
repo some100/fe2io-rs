@@ -1,9 +1,12 @@
 use crate::{Args, Fe2IoError, MsgValue};
 use log::error;
 use reqwest::Client;
-use rodio::{Decoder, Sink};
+use rodio::{Decoder, Sink, Source};
 use std::io::Cursor;
-use tokio::{sync::mpsc::Receiver, time::Duration};
+use tokio::{
+    sync::mpsc::Receiver, 
+    time::{sleep, Duration, Instant},
+};
 
 pub async fn audio_loop(
     sink: Sink,
@@ -50,12 +53,15 @@ fn change_status(sink: &Sink, input: &str, args: &Args) -> Result<(), Fe2IoError
 }
 
 async fn play_audio(sink: &Sink, client: &Client, input: &str) -> Result<(), Fe2IoError> {
+    let start = Instant::now();
     sink.set_volume(1.0); // Volume is set to 1.0 by default. If this is too low or too high, you can manually change your volume
     sink.stop();
     let response = client.get(input).send().await?;
     let audio = response.error_for_status()?;
     let cursor = Cursor::new(audio.bytes().await?);
     let source = Decoder::new(cursor)?;
-    sink.append(source);
+    let elapsed = Instant::now().duration_since(start);
+    sleep(Duration::from_millis(500)).await;
+    sink.append(source.skip_duration(elapsed));
     Ok(())
 }
