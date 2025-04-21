@@ -2,7 +2,7 @@ use crate::{websocket, Args, Fe2IoError, Msg, MsgValue};
 use futures_util::StreamExt;
 use log::{debug, error, warn};
 use tokio::{net::TcpStream, sync::mpsc::Sender};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{tungstenite, MaybeTlsStream, WebSocketStream};
 
 pub async fn event_loop(
     mut server: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -11,7 +11,10 @@ pub async fn event_loop(
 ) -> Result<(), Fe2IoError> {
     loop {
         match handle_events(&mut server, &tx).await {
-            Err(Fe2IoError::Reconnect()) => server = websocket::reconnect_to_server(&args).await?,
+            Err(Fe2IoError::Reconnect(e)) => server = {
+                error!("{e}");
+                websocket::reconnect_to_server(&args).await?
+            },
             Err(Fe2IoError::Send(e)) => return Err(Fe2IoError::Send(e)),
             Err(e) => error!("{e}"),
             _ => (),
@@ -32,9 +35,11 @@ async fn handle_events(
 async fn read_server_response(
     server: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
 ) -> Result<String, Fe2IoError> {
-    let Some(Ok(response)) = server.next().await else {
-        return Err(Fe2IoError::Reconnect());
-    };
+    let response = server
+        .next()
+        .await
+        .ok_or(Fe2IoError::Reconnect(tungstenite::Error::ConnectionClosed))?
+        .map_err(Fe2IoError::Reconnect)?;
     debug!("Received message {response}");
     Ok(response.to_text()?.to_owned())
 }

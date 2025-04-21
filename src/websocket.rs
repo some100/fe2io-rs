@@ -48,7 +48,7 @@ async fn delay_reconnect(
             "Failed to connect to server after {} attempts, bailing",
             args.attempts
         );
-        return Err(Fe2IoError::NoRetry());
+        return Err(Fe2IoError::NoRetry);
     }
     sleep(Duration::from_secs(delay)).await;
     delay = (delay * args.backoff).min(args.max_delay);

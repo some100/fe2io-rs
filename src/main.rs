@@ -5,7 +5,7 @@ mod websocket;
 
 use crate::error::Fe2IoError;
 use clap::Parser;
-use log::warn;
+use log::{warn, error};
 use rodio::{OutputStream, Sink};
 use serde::Deserialize;
 use tokio::{signal::ctrl_c, sync::mpsc::channel, task::JoinSet};
@@ -71,7 +71,11 @@ async fn main() -> Result<(), Fe2IoError> {
     tasks.spawn(event::event_loop(server, tx, args));
 
     tokio::select! {
-        _ = wait_for_tasks(&mut tasks) => (),
+        res = wait_for_tasks(&mut tasks) => {
+            if let Err(e) = res {
+                error!("{e}");
+            }
+        },
         _ = ctrl_c() => {
             warn!("Received interrupt, exiting");
             tasks.shutdown().await;
@@ -83,7 +87,7 @@ async fn main() -> Result<(), Fe2IoError> {
 async fn wait_for_tasks(tasks: &mut JoinSet<Result<(), Fe2IoError>>) -> Result<(), Fe2IoError> {
     match tasks.join_next().await {
         Some(Err(e)) => return Err(Fe2IoError::Join(e)),
-        None => return Err(Fe2IoError::NoTasks()), // something really bad must have happened for this to be the case
+        None => return Err(Fe2IoError::NoTasks), // something really bad must have happened for this to be the case
         _ => warn!("At least one task exited, ending program"),
     }
     Ok(())
