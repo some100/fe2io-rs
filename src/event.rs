@@ -1,8 +1,8 @@
 use crate::{websocket, Args, Fe2IoError, Msg, MsgValue};
 use futures_util::StreamExt;
-use log::{debug, error, warn};
 use tokio::{net::TcpStream, sync::mpsc::Sender};
 use tokio_tungstenite::{tungstenite, MaybeTlsStream, WebSocketStream};
+use tracing::{debug, error, warn};
 
 pub async fn event_loop(
     mut server: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -11,10 +11,12 @@ pub async fn event_loop(
 ) -> Result<(), Fe2IoError> {
     loop {
         match handle_events(&mut server, &tx).await {
-            Err(Fe2IoError::Reconnect(e)) => server = {
-                error!("{e}");
-                websocket::reconnect_to_server(&args).await?
-            },
+            Err(Fe2IoError::Reconnect(e)) => {
+                server = {
+                    error!("{e}");
+                    websocket::reconnect_to_server(&args).await?
+                }
+            }
             Err(Fe2IoError::Send(e)) => return Err(Fe2IoError::Send(e)),
             Err(e) => error!("{e}"),
             _ => (),
@@ -55,7 +57,7 @@ async fn match_server_response(msg: Msg, tx: &Sender<MsgValue>) -> Result<(), Fe
         "bgm" => get_audio(msg, tx).await?,
         "gameStatus" => get_status(msg, tx).await?,
         _ => warn!("Server sent invalid msgType {}", msg.type_),
-    };
+    }
     Ok(())
 }
 

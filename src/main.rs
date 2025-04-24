@@ -5,10 +5,10 @@ mod websocket;
 
 use crate::error::Fe2IoError;
 use clap::Parser;
-use log::{warn, error};
 use rodio::{OutputStream, Sink};
 use serde::Deserialize;
 use tokio::{signal::ctrl_c, sync::mpsc::channel, task::JoinSet};
+use tracing::{error, warn, Level};
 
 /// Lighterweight alternative for fe2.io
 #[derive(Parser, Clone)]
@@ -56,8 +56,10 @@ enum MsgValue {
 async fn main() -> Result<(), Fe2IoError> {
     let mut tasks = JoinSet::new();
 
-    let env = env_logger::Env::default().filter_or("LOG_LEVEL", "info");
-    env_logger::init_from_env(env);
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(Level::INFO)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber)?;
 
     let args = Args::parse();
 

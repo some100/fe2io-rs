@@ -1,6 +1,5 @@
 use crate::{Args, Fe2IoError};
 use futures_util::SinkExt;
-use log::{debug, error, info, warn};
 use tokio::{
     net::TcpStream,
     time::{sleep, Duration},
@@ -10,6 +9,7 @@ use tokio_tungstenite::{
     tungstenite::{self, Message},
     MaybeTlsStream, WebSocketStream,
 };
+use tracing::{debug, error, info, warn};
 
 pub async fn connect_to_server(
     args: &Args,

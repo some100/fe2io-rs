@@ -1,5 +1,4 @@
 use crate::{Args, Fe2IoError, MsgValue};
-use log::error;
 use reqwest::Client;
 use rodio::{Decoder, Sink, Source};
 use std::io::Cursor;
@@ -7,6 +6,7 @@ use tokio::{
     sync::mpsc::Receiver,
     time::{sleep, Duration, Instant},
 };
+use tracing::error;
 
 pub async fn audio_loop(
     sink: Sink,

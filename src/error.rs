@@ -1,8 +1,5 @@
 use thiserror::Error;
-use tokio::{
-    sync::mpsc::error::SendError,
-    task::JoinError,
-};
+use tokio::{sync::mpsc::error::SendError, task::JoinError};
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 
 #[derive(Error, Debug)]
@@ -25,6 +22,8 @@ pub enum Fe2IoError {
     Join(#[from] JoinError),
     #[error("JSON Error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("Failed to set log subscriber as global default")]
+    Subscriber(#[from] tracing::subscriber::SetGlobalDefaultError),
     #[error("Reconnecting to server due to error: {0}")]
     Reconnect(TungsteniteError),
     #[error("Invalid response from server: {0}")]
